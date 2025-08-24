@@ -1,0 +1,97 @@
+name: Test GCP Workload Identity Federation
+
+on:
+  workflow_dispatch:  # Manual trigger for testing
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test-gcp-auth:
+    name: Test GCP Authentication
+    runs-on: ubuntu-latest
+    
+    # Required for OIDC authentication
+    permissions:
+      contents: read
+      id-token: write
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Authenticate to Google Cloud
+      id: auth
+      uses: google-github-actions/auth@v2
+      with:
+        token_format: 'access_token'
+        workload_identity_provider: 'projects/146869023108/locations/global/workloadIdentityPools/github-pool/providers/github-oidc'
+        service_account: 'github-ci@github-ci-blanxlait.iam.gserviceaccount.com'
+    
+    - name: Set up Cloud SDK
+      uses: google-github-actions/setup-gcloud@v2
+      with:
+        version: 'latest'
+    
+    - name: Test authentication
+      run: |
+        echo "Testing GCP authentication..."
+        gcloud auth list
+        echo ""
+        echo "Current project:"
+        gcloud config get-value project
+        echo ""
+        echo "Available projects:"
+        gcloud projects list --limit=5
+    
+    - name: Test Storage access
+      run: |
+        echo "Testing Storage Admin permissions..."
+        # List all buckets (requires Storage Admin role)
+        echo "Available storage buckets:"
+        gcloud storage ls || echo "No buckets found or no access"
+    
+    - name: Test IAM permissions
+      run: |
+        echo "Testing IAM permissions..."
+        # Test if we can list service accounts in our project
+        echo "Service accounts in github-ci-blanxlait project:"
+        gcloud iam service-accounts list --project=github-ci-blanxlait
+    
+    - name: Create test bucket (if needed)
+      run: |
+        echo "Testing bucket creation..."
+        BUCKET_NAME="test-wif-$(date +%s)-$(echo $RANDOM)"
+        echo "Creating test bucket: gs://$BUCKET_NAME"
+        
+        # Try to create a bucket (this will test our Storage Admin permissions)
+        if gcloud storage buckets create gs://$BUCKET_NAME --location=us-central1 --project=github-ci-blanxlait; then
+          echo "✅ Successfully created bucket: gs://$BUCKET_NAME"
+          
+          # Test uploading a file
+          echo "Hello from GitHub Actions!" > test-file.txt
+          gcloud storage cp test-file.txt gs://$BUCKET_NAME/
+          echo "✅ Successfully uploaded test file"
+          
+          # Test downloading the file
+          gcloud storage cp gs://$BUCKET_NAME/test-file.txt downloaded-file.txt
+          echo "✅ Successfully downloaded test file"
+          cat downloaded-file.txt
+          
+          # Clean up
+          gcloud storage rm gs://$BUCKET_NAME/test-file.txt
+          gcloud storage buckets delete gs://$BUCKET_NAME --quiet
+          echo "✅ Cleaned up test resources"
+        else
+          echo "❌ Failed to create bucket - check Storage Admin permissions"
+          exit 1
+        fi
+    
+    - name: Summary
+      run: |
+        echo "🎉 All tests passed!"
+        echo "✅ OIDC authentication working"
+        echo "✅ Service account impersonation working"
+        echo "✅ Storage Admin permissions working"
+        echo "✅ Project access working"
