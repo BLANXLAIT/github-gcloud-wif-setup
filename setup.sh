@@ -228,9 +228,19 @@ else
   echo "  Workload Identity User role already granted."
 fi
 
-echo "Step 11: Granting Storage Admin role (for demo, adjust as needed)..."
+echo "Step 11: Granting Service Account Token Creator role..."
 if ! gcloud projects get-iam-policy "$PROJECT_ID" \
-      --format="json" | grep -q "serviceAccount:$SERVICE_ACCOUNT_EMAIL"; then
+      --format="json" | grep -q "serviceAccount:$SERVICE_ACCOUNT_EMAIL.*roles/iam.serviceAccountTokenCreator"; then
+  gcloud projects add-iam-policy-binding "$PROJECT_ID" \
+    --member="serviceAccount:$SERVICE_ACCOUNT_EMAIL" \
+    --role="roles/iam.serviceAccountTokenCreator"
+else
+  echo "  Service Account Token Creator role already granted."
+fi
+
+echo "Step 12: Granting Storage Admin role (for demo, adjust as needed)..."
+if ! gcloud projects get-iam-policy "$PROJECT_ID" \
+      --format="json" | grep -q "serviceAccount:$SERVICE_ACCOUNT_EMAIL.*roles/storage.admin"; then
   gcloud projects add-iam-policy-binding "$PROJECT_ID" \
     --member="serviceAccount:$SERVICE_ACCOUNT_EMAIL" \
     --role="roles/storage.admin"
@@ -251,7 +261,7 @@ fi
 echo "  - Workload Identity Pool:    $POOL_ID"
 echo "  - OIDC Provider:             $PROVIDER_ID"
 echo "  - Service Account:           $SERVICE_ACCOUNT_EMAIL"
-echo "  - IAM Roles:                 Workload Identity User, Storage Admin"
+echo "  - IAM Roles:                 Workload Identity User, Service Account Token Creator, Storage Admin"
 echo ""
 echo "Next steps:"
 echo "  1. Use the values below in your GitHub Actions workflow"
