@@ -38,7 +38,7 @@ set -euo pipefail
 PROJECT_ID="github-ci-blanxlait"
 PROJECT_NAME="GitHub CI for BLANXLAIT"
 POOL_ID="github-pool"
-PROVIDER_ID="github-oidc"
+PROVIDER_ID="github-oidc-v2"
 SERVICE_ACCOUNT_NAME="github-ci"
 GITHUB_ORG="BLANXLAIT"
 GITHUB_REPO="*"
@@ -200,7 +200,7 @@ if ! gcloud iam workload-identity-pools providers describe "$PROVIDER_ID" \
     --display-name="GitHub Actions OIDC" \
     --issuer-uri="https://token.actions.githubusercontent.com" \
     --attribute-mapping="google.subject=assertion.sub,attribute.repository=assertion.repository,attribute.actor=assertion.actor" \
-    --attribute-condition="assertion.repository_owner=='$GITHUB_ORG'"
+    --attribute-condition="assertion.repository.startsWith('$GITHUB_ORG/')"
 else
   echo "  Provider already exists."
 fi
@@ -229,13 +229,26 @@ else
 fi
 
 echo "Step 11: Granting Service Account Token Creator role..."
+# Grant on project level
 if ! gcloud projects get-iam-policy "$PROJECT_ID" \
       --format="json" | grep -q "serviceAccount:$SERVICE_ACCOUNT_EMAIL.*roles/iam.serviceAccountTokenCreator"; then
   gcloud projects add-iam-policy-binding "$PROJECT_ID" \
     --member="serviceAccount:$SERVICE_ACCOUNT_EMAIL" \
     --role="roles/iam.serviceAccountTokenCreator"
 else
-  echo "  Service Account Token Creator role already granted."
+  echo "  Service Account Token Creator role (project level) already granted."
+fi
+
+# Grant on service account itself (required for self-impersonation)
+if ! gcloud iam service-accounts get-iam-policy "$SERVICE_ACCOUNT_EMAIL" \
+      --project="$PROJECT_ID" \
+      --format="json" | grep -q "serviceAccount:$SERVICE_ACCOUNT_EMAIL.*roles/iam.serviceAccountTokenCreator"; then
+  gcloud iam service-accounts add-iam-policy-binding "$SERVICE_ACCOUNT_EMAIL" \
+    --project="$PROJECT_ID" \
+    --member="serviceAccount:$SERVICE_ACCOUNT_EMAIL" \
+    --role="roles/iam.serviceAccountTokenCreator"
+else
+  echo "  Service Account Token Creator role (service account level) already granted."
 fi
 
 echo "Step 12: Granting Storage Admin role (for demo, adjust as needed)..."
