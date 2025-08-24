@@ -1,84 +1,170 @@
 # GitHub <-> Google Cloud Workload Identity Federation Setup
 
-## Overview
-This repository contains a script to set up secure, keyless authentication between GitHub Actions and Google Cloud Platform using Workload Identity Federation.
+Automated setup for secure, keyless authentication between GitHub Actions and Google Cloud Platform using Workload Identity Federation.
 
-## What This Does
-- Creates a dedicated GCP project for CI/CD operations (`github-ci-blanxlait`)
-- Sets up Workload Identity Federation with GitHub OIDC
-- Creates a service account for GitHub Actions
-- Configures necessary IAM permissions
-- Provides the configuration for your GitHub workflows
+## ✨ What This Does
 
-## Prerequisites Checklist
+- 🔐 **Keyless Authentication**: No secrets to manage - uses OIDC tokens
+- 🏗️ **Dedicated Project**: Creates `github-ci-blanxlait` for CI/CD isolation  
+- 🎯 **Multi-Repository Support**: Works with all repos in your organization
+- ⚡ **Ready to Use**: Provides exact configuration for GitHub workflows
 
-### ✅ Google Cloud Setup
-- [ ] Google Cloud CLI installed (`gcloud` command available)
-- [ ] Authenticated with your GCP account (`gcloud auth login`)
-- [ ] Have billing account access
-- [ ] Have organization admin rights (if using GCP organization)
+## 🚀 Quick Start
 
-### ✅ GitHub Setup
-- [ ] Admin access to the GitHub organization: `BLANXLAIT`
-- [ ] Know which repositories need access (currently set to `*` for all repos)
+### 1. Prerequisites Check
+```bash
+# Verify you have these:
+gcloud auth login              # ✅ Authenticated to GCP
+gcloud billing accounts list   # ✅ Have billing access
+gh auth status                 # ✅ Authenticated to GitHub
+```
 
-### ✅ Configuration Review
-Before running, review these variables in `setup.sh`:
+### 2. Configure Repositories
+Edit `setup.sh` to specify which repositories should have access:
 
 ```bash
-PROJECT_ID="github-ci-blanxlait"           # New project for CI/CD
-PROJECT_NAME="GitHub CI for BLANXLAIT"    # Display name
-POOL_ID="github-pool"                      # Workload Identity Pool name
-PROVIDER_ID="github-oidc"                  # OIDC provider name
-SERVICE_ACCOUNT_NAME="github-ci"           # Service account for GitHub Actions
-GITHUB_ORG="BLANXLAIT"                     # Your GitHub organization
-GITHUB_REPO="*"                           # Repositories with access (* = all)
+# For multiple repositories (recommended):
+GITHUB_REPOS=(
+  "github-gcloud-wif-setup"
+  "my-app-repo"
+  "my-other-repo"
+  # Add more repositories here
+)
+
+# For single repository:
+GITHUB_REPO="specific-repo-name"  # Change from "*" to specific repo
 ```
 
-## Important Notes
+### 3. Run Setup
+```bash
+./setup.sh
+```
 
-### 🔒 Security
-- **No secrets are created or stored** - uses modern keyless authentication
-- **Separate project** - CI/CD operations are isolated from your main resources
-- **Minimal permissions** - Only grants necessary access (currently Storage Admin for demo)
-
-### 💰 Billing
-- The script will create a new project and link it to your billing account
-- CI/CD costs will be tracked separately from your main project
-
-### 🎯 Scope
-- Currently configured for all repositories in `BLANXLAIT` org
-- You can restrict to specific repos by changing `GITHUB_REPO="*"` to `GITHUB_REPO="specific-repo"`
-
-## Usage
-
-1. **Review configuration** in `setup.sh`
-2. **Run the script**: `./setup.sh`
-3. **Copy the output** to your GitHub Actions workflow
-4. **Adjust IAM roles** as needed for your specific use case
-
-## Sample GitHub Actions Usage
-
-After running the script, you'll get output like this to use in your workflows:
+### 4. Use in GitHub Actions
+Copy the output from the script into your workflow:
 
 ```yaml
-- id: 'auth'
-  uses: 'google-github-actions/auth@v2'
-  with:
-    token_format: 'access_token'
-    workload_identity_provider: 'projects/123456789/locations/global/workloadIdentityPools/github-pool/providers/github-oidc'
-    service_account: 'github-ci@github-ci-blanxlait.iam.gserviceaccount.com'
+name: Deploy to GCP
+on: [push]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write  # Required for OIDC
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - id: auth
+      uses: google-github-actions/auth@v2
+      with:
+        workload_identity_provider: 'projects/146869023108/locations/global/workloadIdentityPools/github-pool/providers/github-oidc-v2'
+        service_account: 'github-ci@github-ci-blanxlait.iam.gserviceaccount.com'
+    
+    - uses: google-github-actions/setup-gcloud@v2
+    
+    - name: Test GCP Access
+      run: gcloud auth list
 ```
 
-## Troubleshooting
+## 🔧 Configuration Options
 
-- **Authentication issues**: Run `gcloud auth login` first
-- **Billing issues**: Ensure you have access to a billing account
-- **Organization issues**: You may need to be an organization admin
-- **API issues**: The script automatically enables required APIs
+### Repository Access Patterns
 
-## Next Steps After Setup
+**Multiple Repositories (Recommended)**
+```bash
+# In setup.sh:
+GITHUB_REPO="*"  # Keep as wildcard
+GITHUB_REPOS=(
+  "repo1"
+  "repo2" 
+  "repo3"
+)
+```
 
-1. Adjust IAM roles for the service account based on your needs
-2. Test the authentication in a simple GitHub Actions workflow
-3. Review the created resources in the GCP console
+**Single Repository**
+```bash
+# In setup.sh:
+GITHUB_REPO="my-specific-repo"  # Change from "*"
+```
+
+### IAM Roles Granted
+- **Workload Identity User**: Allows GitHub Actions to impersonate the service account
+- **Service Account Token Creator**: Allows generating access tokens (required)
+- **Storage Admin**: Demo role - customize based on your needs
+
+### Key Configuration Variables
+```bash
+PROJECT_ID="github-ci-blanxlait"      # Dedicated CI/CD project
+GITHUB_ORG="BLANXLAIT"                # Your GitHub organization  
+SERVICE_ACCOUNT_NAME="github-ci"      # Service account name
+```
+
+## 🛠️ Advanced Usage
+
+### Adding New Repositories
+1. Edit `setup.sh` and add to `GITHUB_REPOS` array:
+   ```bash
+   GITHUB_REPOS=(
+     "existing-repo"
+     "new-repo"  # Add this line
+   )
+   ```
+2. Re-run: `./setup.sh`
+3. New repo automatically gets access
+
+### Customizing IAM Roles
+Edit the script to change the default Storage Admin role:
+```bash
+# Replace this section with your needed roles:
+gcloud projects add-iam-policy-binding "$PROJECT_ID" \
+  --member="serviceAccount:$SERVICE_ACCOUNT_EMAIL" \
+  --role="roles/YOUR_ROLE_HERE"
+```
+
+### Testing Your Setup
+A test workflow is included in `.github/workflows/test-gcp-auth.yml` that:
+- ✅ Verifies authentication works
+- ✅ Tests service account permissions  
+- ✅ Creates/deletes a storage bucket
+- ✅ Validates the complete setup
+
+## 📋 Troubleshooting
+
+| Issue | Solution |
+|-------|----------|
+| `Permission denied` errors | Run `gcloud auth login` and ensure billing access |
+| `getAccessToken permission denied` | Check that Service Account Token Creator role is granted |
+| Workflow authentication fails | Verify repository is in `GITHUB_REPOS` array |
+| Billing account issues | Ensure you have Billing Account User or Admin role |
+
+## 🔍 Verification
+
+After setup, verify everything works:
+```bash
+# Check created resources:
+gcloud projects list --filter="name:github-ci-blanxlait"
+gcloud iam service-accounts list --project=github-ci-blanxlait
+gcloud iam workload-identity-pools list --location=global --project=github-ci-blanxlait
+
+# Test the GitHub workflow:
+gh workflow run "Test GCP Workload Identity Federation"
+gh run list --workflow="test-gcp-auth.yml" --limit=1
+```
+
+## 📚 References
+
+- 🔗 [Example Repository](https://github.com/BLANXLAIT/github-gcloud-wif-setup) - This repo as reference
+- 📖 [Wildcard Investigation](./WILDCARD_INVESTIGATION.md) - Details on repository access patterns
+- 🔧 [Setup Complete](./SETUP_COMPLETE.md) - Final configuration details
+- 🛠️ [Copilot Instructions](./.github/copilot-instructions.md) - Development workflow guide
+
+## 🏆 What You Get
+
+✅ **Secure**: No service account keys to manage  
+✅ **Scalable**: Easy to add new repositories  
+✅ **Isolated**: Dedicated project for CI/CD  
+✅ **Tested**: Includes validation workflow  
+✅ **Documented**: Complete setup and usage guide

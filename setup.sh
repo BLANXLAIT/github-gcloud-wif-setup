@@ -41,7 +41,20 @@ POOL_ID="github-pool"
 PROVIDER_ID="github-oidc-v2"
 SERVICE_ACCOUNT_NAME="github-ci"
 GITHUB_ORG="BLANXLAIT"
-GITHUB_REPO="*"
+
+# Repository Configuration:
+# For multiple repositories: Keep GITHUB_REPO="*" and list repos in GITHUB_REPOS array
+# For single repository: Set GITHUB_REPO to specific repo name (e.g., "my-repo")
+GITHUB_REPO="*"  # Set to "*" for all repos, or specific repo name for single repo
+
+# List of specific repositories to grant access to (used when GITHUB_REPO="*")
+# Add new repositories here as needed
+GITHUB_REPOS=(
+  "github-gcloud-wif-setup"
+  # Add more repositories here, one per line:
+  # "my-other-repo"
+  # "another-repo"
+)
 # ========================
 
 echo "======================================================"
@@ -55,7 +68,12 @@ echo "  4. Enable IAM APIs"
 echo "  5. Set up a Workload Identity Pool and GitHub OIDC provider"
 echo "  6. Create (or reuse) a service account for GitHub Actions"
 echo "  7. Grant permissions (Workload Identity User and Storage Admin)"
-echo "  8. Print the config you need for GitHub Actions"
+if [[ "$GITHUB_REPO" == "*" ]]; then
+echo "  8. Configure access for ${#GITHUB_REPOS[@]} repositories in $GITHUB_ORG organization"
+else
+echo "  8. Configure access for $GITHUB_ORG/$GITHUB_REPO repository"
+fi
+echo "  9. Print the config you need for GitHub Actions"
 echo ""
 echo "You will need:"
 echo "  - Owner/admin access to your GCP org and billing account"
@@ -216,39 +234,89 @@ else
 fi
 
 echo "Step 10: Granting Workload Identity User role..."
-MEMBER="principalSet://iam.googleapis.com/projects/$PROJECT_NUMBER/locations/global/workloadIdentityPools/$POOL_ID/attribute.repository/$GITHUB_ORG/$GITHUB_REPO"
-if ! gcloud iam service-accounts get-iam-policy "$SERVICE_ACCOUNT_EMAIL" \
-      --project="$PROJECT_ID" \
-      --format="json" | grep -q "$MEMBER"; then
-  gcloud iam service-accounts add-iam-policy-binding "$SERVICE_ACCOUNT_EMAIL" \
-    --project="$PROJECT_ID" \
-    --role="roles/iam.workloadIdentityUser" \
-    --member="$MEMBER"
+if [[ "$GITHUB_REPO" == "*" ]]; then
+  echo "  Configuring access for multiple repositories in $GITHUB_ORG organization..."
+  for repo in "${GITHUB_REPOS[@]}"; do
+    MEMBER="principalSet://iam.googleapis.com/projects/$PROJECT_NUMBER/locations/global/workloadIdentityPools/$POOL_ID/attribute.repository/$GITHUB_ORG/$repo"
+    echo "  Granting access to: $GITHUB_ORG/$repo"
+    
+    if ! gcloud iam service-accounts get-iam-policy "$SERVICE_ACCOUNT_EMAIL" \
+          --project="$PROJECT_ID" \
+          --format="json" | grep -q "$MEMBER"; then
+      gcloud iam service-accounts add-iam-policy-binding "$SERVICE_ACCOUNT_EMAIL" \
+        --project="$PROJECT_ID" \
+        --role="roles/iam.workloadIdentityUser" \
+        --member="$MEMBER"
+    else
+      echo "    Access already granted for $repo"
+    fi
+  done
 else
-  echo "  Workload Identity User role already granted."
+  # Single repository configuration
+  MEMBER="principalSet://iam.googleapis.com/projects/$PROJECT_NUMBER/locations/global/workloadIdentityPools/$POOL_ID/attribute.repository/$GITHUB_ORG/$GITHUB_REPO"
+  if ! gcloud iam service-accounts get-iam-policy "$SERVICE_ACCOUNT_EMAIL" \
+        --project="$PROJECT_ID" \
+        --format="json" | grep -q "$MEMBER"; then
+    
+    # Remove old bindings if they exist (cleanup from provider changes)
+    echo "  Cleaning up old Workload Identity User bindings..."
+    OLD_MEMBERS=$(gcloud iam service-accounts get-iam-policy "$SERVICE_ACCOUNT_EMAIL" \
+      --project="$PROJECT_ID" \
+      --format="json" | jq -r '.bindings[] | select(.role=="roles/iam.workloadIdentityUser") | .members[]' | grep principalSet || true)
+    
+    for OLD_MEMBER in $OLD_MEMBERS; do
+      if [[ "$OLD_MEMBER" != "$MEMBER" ]]; then
+        echo "  Removing old binding: $OLD_MEMBER"
+        gcloud iam service-accounts remove-iam-policy-binding "$SERVICE_ACCOUNT_EMAIL" \
+          --project="$PROJECT_ID" \
+          --role="roles/iam.workloadIdentityUser" \
+          --member="$OLD_MEMBER" 2>/dev/null || true
+      fi
+    done
+    
+    # Add the correct binding
+    gcloud iam service-accounts add-iam-policy-binding "$SERVICE_ACCOUNT_EMAIL" \
+      --project="$PROJECT_ID" \
+      --role="roles/iam.workloadIdentityUser" \
+      --member="$MEMBER"
+  else
+    echo "  Workload Identity User role already granted."
+  fi
 fi
 
-echo "Step 11: Granting Service Account Token Creator role..."
-# Grant on project level
-if ! gcloud projects get-iam-policy "$PROJECT_ID" \
-      --format="json" | grep -q "serviceAccount:$SERVICE_ACCOUNT_EMAIL.*roles/iam.serviceAccountTokenCreator"; then
-  gcloud projects add-iam-policy-binding "$PROJECT_ID" \
-    --member="serviceAccount:$SERVICE_ACCOUNT_EMAIL" \
-    --role="roles/iam.serviceAccountTokenCreator"
+echo "Step 11: Granting Service Account Token Creator role to external identity..."
+# This is the CRITICAL role that allows GitHub Actions to generate access tokens
+# for the service account. Without this, you get "getAccessToken permission denied"
+if [[ "$GITHUB_REPO" == "*" ]]; then
+  echo "  Configuring token creator access for multiple repositories..."
+  for repo in "${GITHUB_REPOS[@]}"; do
+    MEMBER="principalSet://iam.googleapis.com/projects/$PROJECT_NUMBER/locations/global/workloadIdentityPools/$POOL_ID/attribute.repository/$GITHUB_ORG/$repo"
+    echo "  Granting token creator access to: $GITHUB_ORG/$repo"
+    
+    if ! gcloud iam service-accounts get-iam-policy "$SERVICE_ACCOUNT_EMAIL" \
+          --project="$PROJECT_ID" \
+          --format="json" | grep -q "$MEMBER.*roles/iam.serviceAccountTokenCreator"; then
+      gcloud iam service-accounts add-iam-policy-binding "$SERVICE_ACCOUNT_EMAIL" \
+        --project="$PROJECT_ID" \
+        --member="$MEMBER" \
+        --role="roles/iam.serviceAccountTokenCreator"
+    else
+      echo "    Token creator access already granted for $repo"
+    fi
+  done
 else
-  echo "  Service Account Token Creator role (project level) already granted."
-fi
-
-# Grant on service account itself (required for self-impersonation)
-if ! gcloud iam service-accounts get-iam-policy "$SERVICE_ACCOUNT_EMAIL" \
+  # Single repository configuration
+  MEMBER="principalSet://iam.googleapis.com/projects/$PROJECT_NUMBER/locations/global/workloadIdentityPools/$POOL_ID/attribute.repository/$GITHUB_ORG/$GITHUB_REPO"
+  if ! gcloud iam service-accounts get-iam-policy "$SERVICE_ACCOUNT_EMAIL" \
+        --project="$PROJECT_ID" \
+        --format="json" | grep -q "$MEMBER.*roles/iam.serviceAccountTokenCreator"; then
+    gcloud iam service-accounts add-iam-policy-binding "$SERVICE_ACCOUNT_EMAIL" \
       --project="$PROJECT_ID" \
-      --format="json" | grep -q "serviceAccount:$SERVICE_ACCOUNT_EMAIL.*roles/iam.serviceAccountTokenCreator"; then
-  gcloud iam service-accounts add-iam-policy-binding "$SERVICE_ACCOUNT_EMAIL" \
-    --project="$PROJECT_ID" \
-    --member="serviceAccount:$SERVICE_ACCOUNT_EMAIL" \
-    --role="roles/iam.serviceAccountTokenCreator"
-else
-  echo "  Service Account Token Creator role (service account level) already granted."
+      --member="$MEMBER" \
+      --role="roles/iam.serviceAccountTokenCreator"
+  else
+    echo "  Service Account Token Creator role (external identity) already granted."
+  fi
 fi
 
 echo "Step 12: Granting Storage Admin role (for demo, adjust as needed)..."
@@ -259,6 +327,44 @@ if ! gcloud projects get-iam-policy "$PROJECT_ID" \
     --role="roles/storage.admin"
 else
   echo "  Storage Admin role already granted."
+fi
+
+echo "Step 13: Validating setup..."
+echo "  Verifying Workload Identity Pool exists..."
+if gcloud iam workload-identity-pools describe "$POOL_ID" --project="$PROJECT_ID" --location="global" &>/dev/null; then
+  echo "  ✅ Workload Identity Pool verified"
+else
+  echo "  ❌ Workload Identity Pool validation failed"
+  exit 1
+fi
+
+echo "  Verifying OIDC provider exists..."
+if gcloud iam workload-identity-pools providers describe "$PROVIDER_ID" \
+    --location="global" \
+    --workload-identity-pool="$POOL_ID" \
+    --project="$PROJECT_ID" &>/dev/null; then
+  echo "  ✅ OIDC provider verified"
+else
+  echo "  ❌ OIDC provider validation failed"
+  exit 1
+fi
+
+echo "  Verifying service account exists..."
+if gcloud iam service-accounts describe "$SERVICE_ACCOUNT_EMAIL" --project="$PROJECT_ID" &>/dev/null; then
+  echo "  ✅ Service account verified"
+else
+  echo "  ❌ Service account validation failed"
+  exit 1
+fi
+
+echo "  Verifying IAM bindings..."
+SA_POLICY=$(gcloud iam service-accounts get-iam-policy "$SERVICE_ACCOUNT_EMAIL" --project="$PROJECT_ID" --format="json")
+if echo "$SA_POLICY" | grep -q "workloadIdentityUser" && echo "$SA_POLICY" | grep -q "serviceAccountTokenCreator"; then
+  echo "  ✅ IAM bindings verified"
+else
+  echo "  ❌ IAM bindings validation failed"
+  echo "  Missing required roles on service account"
+  exit 1
 fi
 
 echo ""
@@ -274,26 +380,49 @@ fi
 echo "  - Workload Identity Pool:    $POOL_ID"
 echo "  - OIDC Provider:             $PROVIDER_ID"
 echo "  - Service Account:           $SERVICE_ACCOUNT_EMAIL"
-echo "  - IAM Roles:                 Workload Identity User, Service Account Token Creator, Storage Admin"
+echo "  - IAM Roles:                 Workload Identity User, Service Account Token Creator (external identity), Storage Admin"
+if [[ "$GITHUB_REPO" == "*" ]]; then
+  echo "  - Repository Access:         ${#GITHUB_REPOS[@]} repositories in $GITHUB_ORG organization"
+  for repo in "${GITHUB_REPOS[@]}"; do
+    echo "    • $GITHUB_ORG/$repo"
+  done
+else
+  echo "  - Repository Access:         $GITHUB_ORG/$GITHUB_REPO"
+fi
 echo ""
 echo "Next steps:"
-echo "  1. Use the values below in your GitHub Actions workflow"
-echo "  2. Adjust IAM roles for the service account if you need more or less access"
-echo "  3. (Optional) Review the service account and WIF pool in the GCP console"
+echo "  1. Copy the workflow configuration below into your GitHub Actions"
+echo "  2. Test with: gh workflow run 'Test GCP Workload Identity Federation'"
+echo "  3. Adjust IAM roles for the service account based on your specific needs"
+echo "  4. Add new repositories by editing GITHUB_REPOS array and re-running this script"
 echo ""
-echo "Paste these into your workflow:"
+echo "📋 GitHub Actions Workflow Configuration:"
 echo ""
 echo "workload_identity_provider: 'projects/$PROJECT_NUMBER/locations/global/workloadIdentityPools/$POOL_ID/providers/$PROVIDER_ID'"
 echo "service_account: '$SERVICE_ACCOUNT_EMAIL'"
 echo ""
 cat <<EOF
-- id: 'auth'
-  uses: 'google-github-actions/auth@v2'
-  with:
-    token_format: 'access_token'
-    workload_identity_provider: 'projects/$PROJECT_NUMBER/locations/global/workloadIdentityPools/$POOL_ID/providers/$PROVIDER_ID'
-    service_account: '$SERVICE_ACCOUNT_EMAIL'
+# Add to your .github/workflows/*.yml file:
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write  # Required for OIDC
+    steps:
+    - uses: actions/checkout@v4
+    - id: auth
+      uses: google-github-actions/auth@v2
+      with:
+        workload_identity_provider: 'projects/$PROJECT_NUMBER/locations/global/workloadIdentityPools/$POOL_ID/providers/$PROVIDER_ID'
+        service_account: '$SERVICE_ACCOUNT_EMAIL'
+    - uses: google-github-actions/setup-gcloud@v2
+    - name: Test GCP Access
+      run: gcloud auth list
 EOF
 echo ""
-echo "Questions or problems? Review the output above or check GCP & GitHub docs."
+echo "🔗 Reference Links:"
+echo "  • Test this setup: gh workflow run 'Test GCP Workload Identity Federation'"
+echo "  • Documentation: $(pwd)/README.md"
+echo "  • Troubleshooting: $(pwd)/WILDCARD_INVESTIGATION.md"
 echo "======================================================"

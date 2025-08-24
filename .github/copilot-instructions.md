@@ -53,6 +53,7 @@ When making changes to this project, follow this iterative pattern:
 
 #### "Permission 'iam.serviceAccounts.getAccessToken' denied"
 - Add `roles/iam.serviceAccountTokenCreator` to the service account
+- **CRITICAL**: Grant `roles/iam.serviceAccountTokenCreator` to the principalSet for external identity access
 - Ensure the role is granted both at project level AND on the service account itself
 - Check Workload Identity Pool attribute conditions
 
