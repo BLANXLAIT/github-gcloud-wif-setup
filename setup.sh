@@ -51,9 +51,7 @@ GITHUB_REPO="*"  # Set to "*" for all repos, or specific repo name for single re
 # Add new repositories here as needed
 GITHUB_REPOS=(
   "github-gcloud-wif-setup"
-  # Add more repositories here, one per line:
-  # "my-other-repo"
-  # "another-repo"
+  "blanxlait-infrastructure"
 )
 # ========================
 
