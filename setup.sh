@@ -52,6 +52,7 @@ GITHUB_REPO="*"  # Set to "*" for all repos, or specific repo name for single re
 GITHUB_REPOS=(
   "github-gcloud-wif-setup"
   "blanxlait-infrastructure"
+  "fischermatch"
 )
 # ========================
 
