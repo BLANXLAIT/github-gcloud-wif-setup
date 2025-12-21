@@ -53,6 +53,7 @@ GITHUB_REPOS=(
   "github-gcloud-wif-setup"
   "blanxlait-infrastructure"
   "fischermatch"
+  "investorlens-app"
 )
 # ========================
 
